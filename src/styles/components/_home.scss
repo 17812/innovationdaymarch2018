@@ -1,0 +1,35 @@
+.content_wrapper {
+    padding: 4rem;
+    font-size: $s-size;
+}
+
+.content_header {
+    color: $main_blue;
+    font-weight: bold;
+}
+
+.start_button {
+    width: 80rem;
+    height: 10rem;
+    color: $body_bg;
+    font-size: 2.5rem;
+}
+
+.button--left {
+    margin-left: 0
+}
+
+.homeStartButton--link {
+    color: $body_bg;
+    font-size: $m-size;
+    text-decoration: none;
+}
+
+.homeStartButtonHover:hover {
+    text-decoration: none;
+    color: $body_bg;
+}
+
+.text-blue {
+    color: $main_blue;
+}

@@ -1,0 +1,221 @@
+/*eslint-env node*/
+var saml2 = require('saml2-js');
+var Saml2js = require('saml2js');
+var fs = require('fs');
+var cookieParser = require('cookie-parser');
+var express = require('express');
+// var session = require('express-session');
+var cookieSession = require('cookie-session');
+var bodyParser = require('body-parser');
+var cors = require('cors');
+var cfenv = require('cfenv');
+
+// Create the Express app
+var app = express();
+var appEnv = cfenv.getAppEnv();
+
+app.use(cookieParser());
+// app.use(cookieSession({ secret: 'yoyo!!', cookie: { maxAge: 60 * 60 * 1000 }}));
+
+app.use(bodyParser.urlencoded({ extended: true }));
+// Use CORS and make the request body easy to parse
+app.use(cors());
+app.options('*', cors()); // include before other routes
+
+var whitelist = ['https://mywork-dev.w3ibm.mybluemix.net', 'https://w3id.alpha.sso.ibm.com/'];
+var corsOptionsDelegate = function(req, callback) {
+  var corsOptions;
+  if (whitelist.indexOf(req.header('Origin')) !== -1) {
+    corsOptions = { origin: true }; // reflect (enable) the requested origin in the CORS response
+  } else {
+    corsOptions = { origin: false }; // disable CORS for this request
+  }
+  callback(null, corsOptions); // callback expects two parameters: error and options
+};
+
+
+app.use(bodyParser.json());
+
+app.all(function(req, res, next) {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'X-Requested-With, Content-type,Accept,X-Access-Token,X-Key');
+  next();
+});
+
+//Get VCAP_SERVICES & USER-DEFINED
+var session_secret = 'dd#s8yU4KL*@7865983jUsdODMTX'; //dummy value
+var w3id_entity_id = 'https://mywork-dev.w3ibm.mybluemix.net:443/metadata.xml';
+var w3id_assert_endpoint = 'https://mywork-dev.w3ibm.mybluemix.net:443/assert';
+var w3id_login_url = 'https://w3id.alpha.sso.ibm.com/auth/sps/samlidp/saml20/logininitial?RequestBinding=HTTPPost&PartnerId=https://mywork-dev.w3ibm.mybluemix.net:443/metadata.xml&NameIdFormat=email&Target=https://mywork-dev.w3ibm.mybluemix.net';
+
+//use Bluemix user-defined
+if (process.env.VCAP_SERVICES) {
+  session_secret = process.env.SESSION_SECRET;
+  w3id_entity_id = process.env.W3ID_ENTITY_ID;
+  w3id_assert_endpoint = process.env.W3ID_ASSERT_ENDPOINT;
+  w3id_login_url = process.env.W3ID_LOGIN_URL;
+}
+
+//app.use(session({ secret: session_secret }));
+app.use(cookieSession({
+  name: 'session',
+  secret: session_secret,
+  resave: true,
+  keys: ['key1', 'key2'],
+  saveUninitialized: true, // Cookie Options
+  maxAge: 24 * 60 * 60 * 1000 // 24 hours
+}));
+
+
+// app.use(session({ secret: session_secret }));
+
+var sess;
+
+// *------------------* //
+// BEGIN W3ID DEFINITION //
+// *------------------* //
+
+// Create service provider
+var sp_options = {
+  entity_id: w3id_entity_id,
+  private_key: fs.readFileSync('cert/key.pem').toString(),
+  certificate: fs.readFileSync('cert/cert.pem').toString(),
+  assert_endpoint: w3id_assert_endpoint
+};
+var sp = new saml2.ServiceProvider(sp_options);
+
+var idp_options = {
+  //Production url (todo: need to move to vcap_services)
+  //sso_login_url: "https://w3id.sso.ibm.com/auth/sps/samlidp/saml20/logininitial?RequestBinding=HTTPPost&PartnerId=https://ashleysaml.w3ibm.mybluemix.net:443/metadata.xml&NameIdFormat=email&Target=https://ashleysaml.w3ibm.mybluemix.net:443/assert",
+
+  sso_login_url: w3id_login_url,
+  certificates: fs.readFileSync('cert/w3id.sso.ibm.com').toString()
+};
+var idp = new saml2.IdentityProvider(idp_options);
+
+// Example of protected express route using SSO
+app.get('/login', function(req, res) {
+  //console.log(idp);
+  sp.create_login_request_url(idp, {}, function(err, login_url, request_id) {
+    if (err != null)
+      return res.send(500);
+    console.log(login_url);
+    res.redirect(login_url);
+  });
+});
+
+// Assert endpoint for when login completes
+app.post('/assert', function(req, res) {
+  //app.post("/login/callback", function(req, res) {
+  var options = { request_body: req };
+  console.log('Body' + JSON.stringify(req.body));
+  var response = new Buffer(req.body.SAMLResponse || req.body.SAMLRequest, 'base64');
+  var parser = new Saml2js(response);
+  //uncomment the below to see all objects returned
+  // return res.json(parser.toObject());
+  var userFromW3 = parser.toObject();
+  var email = userFromW3.emailaddress;
+  var firstname = userFromW3.firstName;
+  console.log('Logged in user: ' + email);
+
+  //Store email in express session
+  sess = req.session;
+  sess.email = email.toLowerCase();
+  sess.firstname = firstname;
+
+  res.redirect('/');
+
+});
+
+// Endpoint to retrieve metadata
+app.get('/metadata.xml', function(req, res) {
+  res.type('application/xml');
+  res.send(sp.create_metadata());
+});
+
+
+//Running on Bluemix ensure we authenticate with w3id
+if (process.env.VCAP_SERVICES) {
+  var vcap_services = JSON.parse(process.env.VCAP_SERVICES);
+  console.log('VCAP_SERVICES: %s', process.env.VCAP_SERVICES);
+  //Initiate SSO authentication
+  app.all('*', function(req, res, next) {
+    sess = req.session;
+    if (sess.email == null || sess.email == '' || sess.email === undefined) {
+      res.redirect('/login');
+    } else {
+      next();
+    }
+  });
+} else {
+  //check if running locally
+  app.use(function(req, res, next) {
+    var url = req.headers.host;
+    var isLocal = (url.indexOf('local') != -1) ? true : false;
+    if (isLocal) {
+      sess = req.session;
+      if (sess.email == null || sess.email == '' || sess.email === undefined) {
+        var config = require('./.config.json');
+        sess.email = config.email;
+        sess.firstname = config.firstname;
+        next();
+      } else {
+        next();
+      }
+    } else {
+      return next();
+    }
+  });
+
+}
+
+//Force all requests over SSL
+app.enable('trust proxy');
+app.use(function(req, res, next) {
+  var url = req.headers.host;
+  isLocal = (url.indexOf('local') != -1) ? true : false;
+  if (!isLocal && !req.secure) {
+    res.redirect('https://' + req.headers.host + req.url);
+  } else {
+    return next();
+  }
+});
+
+// *------------------* //
+//  END W3ID DEFINITION  //
+// *------------------* //
+
+// ------ Define express endpoints ------
+// Serve static HTML files (IMPORTANT: do not move this leave below SSL/w3ID configuration)
+app.use(express.static('public'));
+
+// *------------------* //
+// BEGIN API DEFINITION //
+// *------------------* //
+
+
+// Get authenticated user from express session
+app.get('/me', cors(corsOptionsDelegate), function(req, res) {
+  user = {
+    'email': sess.email,
+    'firstname': sess.firstname
+  };
+  res.send(user);
+});
+
+
+// *------------------* //
+//  END API DEFINITION  //
+// *------------------* //
+
+
+// Start the server and let the magic happen...
+// app.listen(appEnv.port, '0.0.0.0', function() {
+//   console.log('The server is starting on ' + appEnv.url + '!');
+// });
+var port = process.env.PORT || 7007;
+
+app.listen(port, '0.0.0.0', function() {
+  console.log('The server is starting on ' + appEnv.url + '!');
+});

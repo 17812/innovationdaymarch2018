@@ -1,0 +1,31 @@
+html {
+    font-size: 62.5%;
+}
+
+body {
+    font-family: 'ibm-plex-sans', 'Helvetica Neue', Arial, sans-serif;
+    color: grey;
+}
+
+.jumbotron-main {
+    background-color: $main_blue;
+    color: $white;
+    padding: 1em;
+    margin-bottom: 0;
+}
+
+.button-main {
+    background-color: $main_blue;
+    border-color: $main_blue;
+}
+
+.floating-H1 {
+    display: inline-block;
+}
+
+// button {
+//     cursor : pointer;
+// }
+// button:disabled {
+//     cursor : default;
+// }
